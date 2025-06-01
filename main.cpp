@@ -17,15 +17,17 @@ private:
   std::vector<Chunk> chunks_;
   std::vector<uint8_t> image_data_compressed_;
   std::vector<uint8_t> image_data_decompressed_;
-  void decompress_data();
-  void compress_data();
-  void load_chunks();
-  void extract_image_data();
+  void decompress_data(void); // データを解凍
+  void compress_data(void); // データを圧縮
+  void load_chunks(void); // チャンク読み込み
+  void extract_image_data(void); // 画像データを抽出
+  void delete_idat(void); // チャンク配列からIDATチャンクを削除
+  void insert_idat(void); // チャンク配列にIDATチャンクを追加
 public:
   explicit PNG(const std::string& path);
-  void reverse_color();
+  void reverse_color(void);
   void write(const std::string& path) const;
-  void debug() const;
+  void debug(void) const;
 };
 
 PNG::PNG(const std::string& path){
@@ -138,6 +140,42 @@ void PNG::compress_data(){
   deflateEnd(&strm);
 }
 
+void PNG::delete_idat(void){
+  chunks_.erase(
+    std::remove_if(chunks_.begin(), chunks_.end(),
+      [](const Chunk& chunk){
+        return utils::equal_stri(chunk.type_string(), "IDAT");
+      }
+    ),
+    chunks_.end()
+  );
+}
+
+void PNG::insert_idat(void){
+  // 新しいIDATチャンクを作成
+  Chunk idat_chunk;
+  idat_chunk.initialize();
+  idat_chunk.length() = image_data_compressed_.size();
+  idat_chunk.type() = 0x49444154;  // "IDAT"
+  idat_chunk.type_string() = "IDAT";
+  // IDATデータを設定
+  std::vector<char> compressed_data(image_data_compressed_.size());
+  std::transform(
+    image_data_compressed_.begin(),
+    image_data_compressed_.end(),
+    compressed_data.begin(),
+    [](uint8_t c) { return static_cast<char>(c); }
+  );
+  idat_chunk.data() = IDAT{idat_chunk.length(), compressed_data};
+  // CRCを計算
+  std::vector<char> crc_data;
+  crc_data.insert(crc_data.end(), idat_chunk.type_string().begin(), idat_chunk.type_string().end());
+  crc_data.insert(crc_data.end(), compressed_data.begin(), compressed_data.end());
+  idat_chunk.crc() = utils::calc_crc(crc_data, 0, crc_data.size());
+  // チャンクを挿入
+  chunks_.insert(chunks_.end() - 1, idat_chunk);
+}
+
 void PNG::write(const std::string& path) const{
   std::ofstream ofs(path, std::ios::out | std::ios::binary);
   if(!ofs){
@@ -184,51 +222,86 @@ void PNG::debug() const{
 }
 
 void PNG::reverse_color(){
-  for(size_t i = 0; i < image_data_decompressed_.size(); i++){
-    if(i % (width_ * 3 + 1) == 0) continue;
-    image_data_decompressed_[i] = ~image_data_decompressed_[i];
-  }
-  compress_data();
-  // IDATチャンクを削除
-  chunks_.erase(
-    std::remove_if(chunks_.begin(), chunks_.end(),
-      [](const Chunk& chunk){
-        return utils::equal_stri(chunk.type_string(), "IDAT");
+  std::vector<char> image_data_unfiltered(image_data_decompressed_.size());
+  const size_t width_data = width_ * 3 + 1;
+  const size_t height = height_;
+  // フィルタ処理を最適化
+  for(size_t y = 0; y < height; y++){
+    const size_t row_start = y * width_data;
+    const uint8_t filter_type = image_data_decompressed_[row_start];
+    const bool has_prev_row = y > 0;
+    // フィルタタイプに応じた処理
+    switch(filter_type){
+      case 1:{ // Subフィルタ
+        for(size_t x = 1; x < width_data; x++){
+          const size_t i = row_start + x;
+          const uint8_t left = (x >= 3) ? image_data_unfiltered[i-3] : 0;
+          image_data_unfiltered[i] = (image_data_decompressed_[i] + left) & 0xFF;
+        }
+        break;
       }
-    ),
-    chunks_.end()
-  );
-  // 新しいIDATチャンクを作成
-  Chunk idat_chunk;
-  idat_chunk.initialize();
-  idat_chunk.length() = image_data_compressed_.size();
-  idat_chunk.type() = 0x49444154;  // "IDAT"
-  idat_chunk.type_string() = "IDAT";
-  // IDATデータを設定
-  std::vector<char> compressed_data(image_data_compressed_.size());
-  std::transform(
-    image_data_compressed_.begin(),
-    image_data_compressed_.end(),
-    compressed_data.begin(),
-    [](uint8_t c) { return static_cast<char>(c); }
-  );
-  idat_chunk.data() = IDAT{idat_chunk.length(), compressed_data};
-  // CRCを計算
-  std::vector<char> crc_data;
-  crc_data.insert(crc_data.end(), idat_chunk.type_string().begin(), idat_chunk.type_string().end());
-  crc_data.insert(crc_data.end(), compressed_data.begin(), compressed_data.end());
-  idat_chunk.crc() = utils::calc_crc(crc_data, 0, crc_data.size());
-  // チャンクを挿入
-  chunks_.insert(chunks_.end() - 1, idat_chunk);
+      case 2:{ // Upフィルタ
+        if(has_prev_row){
+          for(size_t x = 1; x < width_data; x++){
+            const size_t i = row_start + x;
+            image_data_unfiltered[i] = (image_data_decompressed_[i] + image_data_unfiltered[i-width_data]) & 0xFF;
+          }
+        }else{
+          for(size_t x = 1; x < width_data; x++){
+            image_data_unfiltered[row_start + x] = image_data_decompressed_[row_start + x];
+          }
+        }
+        break;
+      }
+      case 3:{ // Averageフィルタ
+        for(size_t x = 1; x < width_data; x++){
+          const size_t i = row_start + x;
+          const uint8_t left = (x >= 3) ? image_data_unfiltered[i-3] : 0;
+          const uint8_t up = has_prev_row ? image_data_unfiltered[i-width_data] : 0;
+          image_data_unfiltered[i] = (image_data_decompressed_[i] + ((left + up) >> 1)) & 0xFF;
+        }
+        break;
+      }
+      case 4:{ // Paethフィルタ
+        for(size_t x = 1; x < width_data; x++){
+          const size_t i = row_start + x;
+          const uint8_t left = (x >= 3) ? image_data_unfiltered[i-3] : 0;
+          const uint8_t up = has_prev_row ? image_data_unfiltered[i-width_data] : 0;
+          const uint8_t upleft = (x >= 3 && has_prev_row) ? image_data_unfiltered[i-width_data-3] : 0;
+          const int p = left + up - upleft;
+          const int pa = std::abs(p - left);
+          const int pb = std::abs(p - up);
+          const int pc = std::abs(p - upleft);
+          const uint8_t predictor = (pa <= pb && pa <= pc) ? left : (pb <= pc ? up : upleft);
+          image_data_unfiltered[i] = (image_data_decompressed_[i] + predictor) & 0xFF;
+        }
+        break;
+      }
+      default:{
+        for(size_t x = 1; x < width_data; x++){
+          image_data_unfiltered[row_start + x] = image_data_decompressed_[row_start + x];
+        }
+      }
+    }
+  }
+  // 色反転処理
+  for(size_t i = 0; i < image_data_decompressed_.size(); i++){
+    if(i % width_data == 0) image_data_decompressed_[i] = 0x00;
+    else image_data_decompressed_[i] = ~image_data_unfiltered[i];
+  }  
+  compress_data();
+  delete_idat();
+  insert_idat();
 }
 
 } // namespace png
 
-int main() {
-  int n = 100;
+int main(int argc, char* argv[]){
+  int n = 1;
   start = std::chrono::system_clock::now();
   for(int i = 0; i < n; i++){
-    png::PNG png{"./new.png"};
+    png::PNG png{argv[1]};
+    // png.debug();
     png.reverse_color();
     png.write("./out_reverse.png");
   }

@@ -235,6 +235,51 @@ public:
   const uint8_t& rendering() const { return rendering_; }
 };
 
+// tEXTチャンク
+class tEXT : public BaseChunkData{
+private:
+  std::string keyword_;
+  std::string text_;
+public:
+  tEXT() = default;
+  tEXT(const uint32_t length, const std::vector<char>& data){
+    set(length, data);
+  }
+  void set(const uint32_t length, const std::vector<char>& data) override{
+    length_ = length;
+    data_raw_ = data;
+    int idx;
+    for(idx = 0; idx < length; idx++){
+      if(data[idx] == 0x00) break;
+      keyword_ += data[idx];
+    }
+    for(idx++; idx < length; idx++){
+      text_ += data[idx];
+    }
+  }
+  inline std::vector<char> get() const override{
+    const size_t total_size = keyword_.size() + 1 + text_.size();
+    std::vector<char> res;
+    res.reserve(total_size);
+    res.assign(keyword_.begin(), keyword_.end());
+    res.push_back(0x00);
+    res.insert(res.end(), text_.begin(), text_.end());
+    return res;
+  }
+  void clear() override{
+    BaseChunkData::clear();
+    keyword_.clear();
+    text_.clear();
+  }
+  void debug() const override{
+    std::cout << "\t" << keyword_ << ": " << text_ << std::endl;
+  }
+  std::string& keyword() { return keyword_; }
+  const std::string& keyword() const { return keyword_; }
+  std::string& text() { return text_; }
+  const std::string& text() const { return text_; }
+};
+
 // IDATチャンク
 class IDAT : public BaseChunkData{
 private:
@@ -292,7 +337,7 @@ public:
   void debug() const override {}
 };
 
-using ChunkData = std::variant<IHDR, PLTE, sRGB, IDAT, IEND>;
+using ChunkData = std::variant<IHDR, PLTE, sRGB, tEXT, IDAT, IEND>;
 
 // チャンククラス
 class Chunk{
@@ -343,6 +388,7 @@ public:
     if(utils::equal_stri(type_string_, "IHDR"))      data_ = IHDR{length_, data_raw_};
     else if(utils::equal_stri(type_string_, "PLTE")) data_ = PLTE{length_, data_raw_};
     else if(utils::equal_stri(type_string_, "sRGB")) data_ = sRGB{length_, data_raw_};
+    else if(utils::equal_stri(type_string_, "tEXT")) data_ = tEXT{length_, data_raw_};
     else if(utils::equal_stri(type_string_, "IDAT")) data_ = IDAT{length_, data_raw_};
     else if(utils::equal_stri(type_string_, "IEND")) data_ = IEND{length_, data_raw_};
 

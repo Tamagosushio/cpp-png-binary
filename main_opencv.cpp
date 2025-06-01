@@ -10,7 +10,7 @@ int get_time_microsec(void){
 }
 
 int main(int argc, char* argv[]){
-  int n = 100;
+  int n = 1;
   start = std::chrono::system_clock::now();
   for(int i = 0; i < n; i++){
     cv::Mat img = cv::imread(argv[1], cv::IMREAD_COLOR);
