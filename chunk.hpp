@@ -16,35 +16,32 @@ constexpr uint64_t BYTE_CRC = 4;
 // ユーティリティ関数
 namespace utils{
   // 大文字小文字区別しない文字列比較
-  inline bool equal_stri(const std::string& s1, const std::string& s2){
-    std::string t1 = s1;
-    std::transform(s1.begin(), s1.end(), t1.begin(),
-      [](char c) { return std::toupper(c); }
-    );
-    std::string t2 = s2;
-    std::transform(s2.begin(), s2.end(), t2.begin(),
-      [](char c) { return std::toupper(c); }
-    );
-    return t1 == t2;
+  inline bool equal_stri(const std::string& s1, const std::string& s2) noexcept {
+    if(s1.size() != s2.size()) return false;
+    for(size_t i = 0; i < s1.size(); ++i){
+      if(std::toupper(static_cast<unsigned char>(s1[i])) != 
+         std::toupper(static_cast<unsigned char>(s2[i]))) return false;
+    }
+    return true;
   }
   // 整数をバイト列に変換
-  inline std::vector<char> int2vecchar(const uint32_t number){
-    std::vector<char> res(4);
-    res[0] = static_cast<char>((number >> 24) & 0xFF);
-    res[1] = static_cast<char>((number >> 16) & 0xFF);
-    res[2] = static_cast<char>((number >> 8) & 0xFF);
-    res[3] = static_cast<char>((number >> 0) & 0xFF);
-    return res;
+  inline std::vector<char> int2vecchar(const uint32_t number) noexcept {
+    return {
+      static_cast<char>((number >> 24) & 0xFF),
+      static_cast<char>((number >> 16) & 0xFF),
+      static_cast<char>((number >> 8) & 0xFF),
+      static_cast<char>((number >> 0) & 0xFF)
+    };
   }
   // CRC計算
-  uint32_t calc_crc(const std::vector<char>& data, size_t start, size_t length){
+  inline uint32_t calc_crc(const std::vector<char>& data, size_t start, size_t length) noexcept {
     uint32_t crc = UINT32_C(0xFFFFFFFF);
     const uint32_t magic = UINT32_C(0xEDB88320);
+    const char* ptr = data.data() + start;
     for(size_t i = 0; i < length; i++){
-      crc ^= static_cast<uint8_t>(data[start + i]);
+      crc ^= static_cast<uint8_t>(ptr[i]);
       for(int j = 0; j < 8; j++){
-        if(crc & 1) crc = (crc >> 1) ^ magic;
-        else        crc >>= 1;
+        crc = (crc & 1) ? ((crc >> 1) ^ magic) : (crc >> 1);
       }
     }
     return ~crc;
@@ -92,23 +89,28 @@ public:
     assert(length == 13);
     length_ = length;
     data_raw_ = data;
-    for(int i = 0; i < 4; i++){
-      image_width_ = (image_width_ << 8) | static_cast<uint8_t>(data[i]);
-    }
-    for(int i = 0; i < 4; i++){
-      image_height_ = (image_height_ << 8) | static_cast<uint8_t>(data[i+4]);
-    }
-    bit_depth_          = static_cast<uint8_t>(data[8]);
-    color_type_         = static_cast<uint8_t>(data[9]);
-    compression_method_ = static_cast<uint8_t>(data[10]);
-    filter_method_      = static_cast<uint8_t>(data[11]);
-    interlace_method_   = static_cast<uint8_t>(data[12]);
+    const char* ptr = data.data();
+    image_width_ = (static_cast<uint8_t>(ptr[0]) << 24)
+                   | (static_cast<uint8_t>(ptr[1]) << 16)
+                   | (static_cast<uint8_t>(ptr[2]) << 8)
+                   |  static_cast<uint8_t>(ptr[3]);
+    image_height_ = (static_cast<uint8_t>(ptr[4]) << 24)
+                    | (static_cast<uint8_t>(ptr[5]) << 16)
+                    | (static_cast<uint8_t>(ptr[6]) << 8)
+                    | static_cast<uint8_t>(ptr[7]);
+    bit_depth_          = static_cast<uint8_t>(ptr[8]);
+    color_type_         = static_cast<uint8_t>(ptr[9]);
+    compression_method_ = static_cast<uint8_t>(ptr[10]);
+    filter_method_      = static_cast<uint8_t>(ptr[11]);
+    interlace_method_   = static_cast<uint8_t>(ptr[12]);
   }
   inline std::vector<char> get() const override{
     std::vector<char> res;
     res.reserve(13);
-    for(const char& c : utils::int2vecchar(image_width_)) res.push_back(c);
-    for(const char& c : utils::int2vecchar(image_height_)) res.push_back(c);
+    const std::vector<char> width_bytes = utils::int2vecchar(image_width_);
+    const std::vector<char> height_bytes = utils::int2vecchar(image_height_);
+    res.insert(res.end(), width_bytes.begin(), width_bytes.end());
+    res.insert(res.end(), height_bytes.begin(), height_bytes.end());
     res.push_back(static_cast<char>(bit_depth_));
     res.push_back(static_cast<char>(color_type_));
     res.push_back(static_cast<char>(compression_method_));
@@ -165,20 +167,24 @@ public:
     assert(length % 3 == 0);
     length_ = length;
     data_raw_ = data;
-    palettes_.reserve(length/3);
-    for(int i = 0; i < length/3; i++){
-      palettes_.emplace_back(3);
-      for(int j = 0; j < 3; j++){
-        palettes_.back()[j] = data[i*3+j];
-      }
+    const size_t num_palettes = length/3;
+    palettes_.resize(num_palettes);
+    const char* ptr = data.data();
+    for(size_t i = 0; i < num_palettes; i++){
+      palettes_[i] = {
+        static_cast<uint8_t>(ptr[i*3]),
+        static_cast<uint8_t>(ptr[i*3+1]),
+        static_cast<uint8_t>(ptr[i*3+2])
+      };
     }
   }
   inline std::vector<char> get() const override{
     std::vector<char> res;
-    for(const auto& palette : palettes_){
-      for(const auto& color : palette){
-        res.push_back(static_cast<char>(color));
-      }
+    res.reserve(palettes_.size() * 3);
+    for(const std::vector<uint8_t>& palette : palettes_){
+      res.push_back(static_cast<char>(palette[0]));
+      res.push_back(static_cast<char>(palette[1]));
+      res.push_back(static_cast<char>(palette[2]));
     }
     return res;
   }
@@ -212,10 +218,10 @@ public:
     assert(length == 1);
     length_ = length;
     data_raw_ = data;
-    rendering_ = data[0];
+    rendering_ = static_cast<uint8_t>(data[0]);
   }
   inline std::vector<char> get() const override{
-    return std::vector<char>{static_cast<char>(rendering_)};
+    return {static_cast<char>(rendering_)};
   }
   void clear() override{
     BaseChunkData::clear();
@@ -242,15 +248,17 @@ public:
     length_ = length;
     data_raw_ = data;
     image_data_.resize(data.size());
-    std::transform(data.begin(), data.end(), image_data_.begin(),
-      [](char c) { return static_cast<uint8_t>(c); }
-    );
+    const char* ptr = data.data();
+    for(size_t i = 0; i < data.size(); ++i){
+      image_data_[i] = static_cast<uint8_t>(ptr[i]);
+    }
   }
   inline std::vector<char> get() const override{
     std::vector<char> res(image_data_.size());
-    std::transform(image_data_.begin(), image_data_.end(), res.begin(),
-      [](uint8_t c) { return static_cast<char>(c); }
-    );
+    const uint8_t* ptr = image_data_.data();
+    for(size_t i = 0; i < image_data_.size(); ++i){
+      res[i] = static_cast<char>(ptr[i]);
+    }
     return res;
   }
   void clear() override{
@@ -311,33 +319,40 @@ public:
   // チャンクデータセット
   uint64_t set(const std::vector<char>& chunk_data){
     // チャンクのデータ長を取得
-    for(int i = 0; i < BYTE_LENGTH; i++){
-      length_ = (length_ << 8) | static_cast<uint8_t>(chunk_data[i]);
-    }
+    const char* ptr = chunk_data.data();
+    length_ = (static_cast<uint8_t>(ptr[0]) << 24)
+              | (static_cast<uint8_t>(ptr[1]) << 16)
+              | (static_cast<uint8_t>(ptr[2]) << 8)
+              | static_cast<uint8_t>(ptr[3]);
     // チャンク名を取得
     type_string_.clear();
+    type_string_.reserve(4);
+    type_ = 0;
     for(int i = 0; i < BYTE_TYPE; i++){
-      type_ = (type_ << 8) | static_cast<uint8_t>(chunk_data[BYTE_LENGTH+i]);
-      type_string_ += chunk_data[BYTE_LENGTH+i];
+      const char c = ptr[BYTE_LENGTH+i];
+      type_ = (type_ << 8) | static_cast<uint8_t>(c);
+      type_string_ += c;
     }
+
     // チャンクのデータを取得
-    data_raw_.resize(length_);
-    std::copy(
-      chunk_data.begin()+BYTE_LENGTH+BYTE_TYPE,
-      chunk_data.begin()+BYTE_LENGTH+BYTE_TYPE+length_,
-      data_raw_.begin()
-    );
+    const size_t data_size = length_;
+    data_raw_.resize(data_size);
+    std::copy_n(ptr + BYTE_LENGTH + BYTE_TYPE, data_size, data_raw_.begin());
+
     // チャンクタイプに応じてデータを設定
     if(utils::equal_stri(type_string_, "IHDR"))      data_ = IHDR{length_, data_raw_};
     else if(utils::equal_stri(type_string_, "PLTE")) data_ = PLTE{length_, data_raw_};
     else if(utils::equal_stri(type_string_, "sRGB")) data_ = sRGB{length_, data_raw_};
     else if(utils::equal_stri(type_string_, "IDAT")) data_ = IDAT{length_, data_raw_};
     else if(utils::equal_stri(type_string_, "IEND")) data_ = IEND{length_, data_raw_};
+
     // CRCチェック
-    for(int i = 0; i < BYTE_CRC; i++){
-      crc_ = (crc_ << 8) | static_cast<uint8_t>(chunk_data[BYTE_LENGTH + BYTE_TYPE + length_ + i]);
-    }
+    crc_ = (static_cast<uint8_t>(ptr[BYTE_LENGTH + BYTE_TYPE + length_]) << 24) |
+           (static_cast<uint8_t>(ptr[BYTE_LENGTH + BYTE_TYPE + length_ + 1]) << 16) |
+           (static_cast<uint8_t>(ptr[BYTE_LENGTH + BYTE_TYPE + length_ + 2]) << 8) |
+           static_cast<uint8_t>(ptr[BYTE_LENGTH + BYTE_TYPE + length_ + 3]);
     assert(crc_ == utils::calc_crc(chunk_data, BYTE_LENGTH, BYTE_TYPE+length_));
+
     return BYTE_LENGTH + BYTE_TYPE + length_ + BYTE_CRC;
   }
   // デバッグ出力

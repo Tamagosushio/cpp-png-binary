@@ -1,4 +1,10 @@
 # include "chunk.hpp"
+# include <chrono>
+
+std::chrono::system_clock::time_point start;
+int get_time_microsec(void){
+  return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - start).count();
+}
 
 namespace png {
 
@@ -213,15 +219,20 @@ void PNG::reverse_color(){
   crc_data.insert(crc_data.end(), compressed_data.begin(), compressed_data.end());
   idat_chunk.crc() = utils::calc_crc(crc_data, 0, crc_data.size());
   // チャンクを挿入
-  chunks_.insert(chunks_.begin() + 2, idat_chunk);
+  chunks_.insert(chunks_.end() - 1, idat_chunk);
 }
 
 } // namespace png
 
 int main() {
-  png::PNG png{"./new.png"};
-  png.reverse_color();
-  png.write("./out.png");
+  int n = 100;
+  start = std::chrono::system_clock::now();
+  for(int i = 0; i < n; i++){
+    png::PNG png{"./new.png"};
+    png.reverse_color();
+    png.write("./out_reverse.png");
+  }
+  std::cout << get_time_microsec() << std::endl;
   return 0;
 }
 
