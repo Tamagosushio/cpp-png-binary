@@ -21,12 +21,22 @@ bool equal_stri(const std::string& s1, const std::string& s2){
   return t1==t2;
 }
 
+inline std::vector<char> int2vecchar(const uint32_t number){
+  std::vector<char> res(4);
+  res[0] = static_cast<char>((number >> 24)  & 0xFF);
+  res[1] = static_cast<char>((number >> 16)  & 0xFF);
+  res[2] = static_cast<char>((number >> 8 ) & 0xFF);
+  res[3] = static_cast<char>((number >> 0 ) & 0xFF);
+  return res;
+}
+
 // チャンクデータのインターフェイス
 class ChunkDataInterface{
 public:
   ChunkDataInterface(void) = default;
-  virtual void clear(void) = 0; // データのクリア
   virtual void set(const uint32_t length, const std::vector<char>& data) = 0; // データセット
+  virtual inline std::vector<char> get(void) const = 0; // データ列取得
+  virtual void clear(void) = 0; // データのクリア
   virtual void debug(void) const = 0; // デバッグ用標準出力
 };
 
@@ -46,11 +56,23 @@ public:
     for(int i = 0; i < 4; i++){
       this->image_height = (this->image_height << 8) | static_cast<uint8_t>(data[i+4]);
     }
-    this->bit_depth = static_cast<uint8_t>(data[8]);
-    this->color_type = static_cast<uint8_t>(data[9]);
+    this->bit_depth          = static_cast<uint8_t>(data[8]);
+    this->color_type         = static_cast<uint8_t>(data[9]);
     this->compression_method = static_cast<uint8_t>(data[10]);
-    this->filter_method = static_cast<uint8_t>(data[11]);
-    this->interlace_method = static_cast<uint8_t>(data[12]);
+    this->filter_method      = static_cast<uint8_t>(data[11]);
+    this->interlace_method   = static_cast<uint8_t>(data[12]);
+  }
+  inline std::vector<char> get(void) const override{
+    std::vector<char> res;
+    res.reserve(13);
+    for(const char& c : int2vecchar(this->image_width)) res.push_back(c);
+    for(const char& c : int2vecchar(this->image_height)) res.push_back(c);
+    res.push_back(static_cast<char>(this->bit_depth));
+    res.push_back(static_cast<char>(this->color_type));
+    res.push_back(static_cast<char>(this->compression_method));
+    res.push_back(static_cast<char>(this->filter_method));
+    res.push_back(static_cast<char>(this->interlace_method));
+    return res;
   }
   void clear(void) override{
     this->image_width = this->image_height = 0;
@@ -84,6 +106,15 @@ public:
       }
     }
   }
+  inline std::vector<char> get(void) const override{
+    std::vector<char> res;
+    for(const std::vector<uint8_t>& v : this->palettes){
+      for(const uint8_t& u : v){
+        res.push_back(u);
+      }
+    }
+    return res;
+  }
   void clear(void) override{
     this->palettes.clear();
   }
@@ -108,6 +139,11 @@ public:
     assert(length == 1);
     this->rendering = data[0];
   }
+  inline std::vector<char> get(void) const override{
+    std::vector<char> res(1);
+    res[0] = static_cast<char>(rendering);
+    return res;
+  }
   void clear(void) override{
     this->rendering = 0;
   }
@@ -129,6 +165,13 @@ public:
       [](char c) { return static_cast<uint8_t>(c); }
     );
   }
+  inline std::vector<char> get(void) const override{
+    std::vector<char> res(this->image_data.size());
+    std::transform(this->image_data.begin(), this->image_data.end(), res.begin(),
+      [](uint8_t c) { return static_cast<char>(c); }
+    );
+    return res;
+  }
   void clear(void) override{
     this->image_data.clear();
   }
@@ -146,6 +189,7 @@ public:
   std::vector<uint8_t> image_data_decompressed;
   IEND(const uint32_t length, const std::vector<char>& data){ assert(length == 0); }
   void set(const uint32_t length, const std::vector<char>& data) override{}
+  inline std::vector<char> get(void) const override{ return std::vector<char>(0); }
   void clear(void) override{}
   void debug(void) const override{}
 };
@@ -165,7 +209,7 @@ public:
   uint32_t crc = 0;
   Chunk(void);
   void initialize(void);
-  uint32_t calc_crc(const std::vector<char>& data, size_t start, size_t length);
+  uint32_t calc_crc(const std::vector<char>& data, size_t start, size_t length) const;
   uint64_t set(const std::vector<char>& data);
   void debug(void) const;
 };
@@ -179,7 +223,7 @@ void Chunk::initialize(void){
   this->data_raw.clear();
   this->crc = 0;
 }
-uint32_t Chunk::calc_crc(const std::vector<char>& data, size_t start, size_t length) {
+uint32_t Chunk::calc_crc(const std::vector<char>& data, size_t start, size_t length) const {
   uint32_t crc = UINT32_C(0xFFFFFFFF);   // 0xFFFFFFFFで初期化
   const uint32_t magic = UINT32_C(0xEDB88320);  // 反転したマジックナンバー
   // データを処理

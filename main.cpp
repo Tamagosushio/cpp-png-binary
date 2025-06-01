@@ -11,6 +11,8 @@ public:
 public:
   PNG(const std::string& path);
   void decompress_data(void);
+  void compress_data(void);
+  void write(const std::string& path) const;
   void debug(void) const;
 };
 
@@ -98,6 +100,68 @@ void PNG::decompress_data(void){
   image_data_decompressed.resize(decompressed_size - strm.avail_out);
   // 使用したリソースを解放
   inflateEnd(&strm);
+}
+void PNG::compress_data(void){
+  z_stream strm;
+  strm.zalloc = Z_NULL;
+  strm.zfree = Z_NULL;
+  strm.opaque = Z_NULL;
+  strm.avail_in = image_data_decompressed.size();
+  strm.next_in = reinterpret_cast<Bytef*>(image_data_decompressed.data());
+  if(deflateInit(&strm, Z_DEFAULT_COMPRESSION) != Z_OK){
+    throw std::runtime_error("deflateInit failed");
+  }
+  size_t compressed_size = static_cast<size_t>(image_data_decompressed.size() * 1.1) + 12;
+  image_data_compressed.resize(compressed_size);
+  strm.avail_out = compressed_size;
+  strm.next_out = reinterpret_cast<Bytef*>(image_data_compressed.data());
+  int ret = deflate(&strm, Z_FINISH);
+  if(ret != Z_STREAM_END){
+    deflateEnd(&strm);
+    throw std::runtime_error("deflate failed");
+  }
+  image_data_compressed.resize(compressed_size - strm.avail_out);
+  deflateEnd(&strm);
+}
+void PNG::write(const std::string& path) const{
+  // 出力ファイルを開く
+  std::ofstream ofs(path, std::ios::out | std::ios::binary);
+  if(!ofs){
+    throw std::runtime_error("Failed to open output file");
+  }
+  // PNGシグネチャを書き込む
+  const unsigned char signature[] = {
+    static_cast<unsigned char>(0x89),
+    static_cast<unsigned char>(0x50),
+    static_cast<unsigned char>(0x4E),
+    static_cast<unsigned char>(0x47),
+    static_cast<unsigned char>(0x0D),
+    static_cast<unsigned char>(0x0A),
+    static_cast<unsigned char>(0x1A),
+    static_cast<unsigned char>(0x0A)
+  };
+  ofs.write(reinterpret_cast<const char*>(signature), 8);
+  // 各チャンクを書き込む
+  for(const Chunk& chunk : chunks){
+    // チャンクの長さを書き込む
+    std::vector<char> length_data = int2vecchar(chunk.length);
+    ofs.write(length_data.data(), 4);
+    // チャンクタイプを書き込む
+    ofs.write(chunk.type_string.c_str(), 4);
+    // チャンクデータを書き込む
+    std::vector<char> chunk_data = std::visit([](const auto& data) {
+      return data.get();
+    }, chunk.data);
+    ofs.write(chunk_data.data(), chunk_data.size());
+    // CRCを計算して書き込む
+    std::vector<char> crc_data;
+    crc_data.insert(crc_data.end(), chunk.type_string.begin(), chunk.type_string.end());
+    crc_data.insert(crc_data.end(), chunk_data.begin(), chunk_data.end());
+    uint32_t crc = chunk.calc_crc(crc_data, 0, crc_data.size());
+    std::vector<char> crc_bytes = int2vecchar(crc);
+    ofs.write(crc_bytes.data(), 4);
+  }
+  ofs.close();
 }
 void PNG::debug(void) const{
   // チャンク情報の表示
