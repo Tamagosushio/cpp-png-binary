@@ -14,6 +14,8 @@ public:
   void compress_data(void);
   void write(const std::string& path) const;
   void debug(void) const;
+
+  void reverse_color(void);
 };
 
 PNG::PNG(const std::string& path){
@@ -178,9 +180,45 @@ void PNG::debug(void) const{
   std::cout << std::endl;
 }
 
+void PNG::reverse_color(void){
+  for(int i = 0; i < this->image_data_decompressed.size(); i++){
+    if(i%(this->width*3 + 1) == 0) continue;
+    this->image_data_decompressed[i] = ~this->image_data_decompressed[i];
+  }
+  compress_data();
+  this->chunks.erase(
+    std::remove_if(this->chunks.begin(), this->chunks.end(), [](const Chunk& chunk){
+      return equal_stri(chunk.type_string, "IDAT");
+    }), this->chunks.end()
+  );
+  // 新しいIDATチャンクを作成
+  Chunk idat_chunk;
+  idat_chunk.initialize();
+  idat_chunk.length = this->image_data_compressed.size();
+  idat_chunk.type = 0x49444154;  // "IDAT"
+  idat_chunk.type_string = "IDAT";
+  // IDATデータを設定
+  std::vector<char> compressed_data(this->image_data_compressed.size());
+  std::transform(
+    this->image_data_compressed.begin(),
+    this->image_data_compressed.end(),
+    compressed_data.begin(),
+    [](uint8_t c) { return static_cast<char>(c); }
+  );
+  idat_chunk.data = IDAT{idat_chunk.length, compressed_data};
+  // CRCを計算
+  std::vector<char> crc_data;
+  crc_data.insert(crc_data.end(), idat_chunk.type_string.begin(), idat_chunk.type_string.end());
+  crc_data.insert(crc_data.end(), compressed_data.begin(), compressed_data.end());
+  idat_chunk.crc = idat_chunk.calc_crc(crc_data, 0, crc_data.size());
+  // チャンクを挿入
+  this->chunks.insert(this->chunks.begin() + 2, idat_chunk);
+}
+
 int main(){
   PNG png{"./new.png"};
-  png.debug();
+  png.reverse_color();
+  png.write("./out.png");
   return 0;
 }
 
