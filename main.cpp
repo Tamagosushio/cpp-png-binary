@@ -17,8 +17,10 @@ private:
   std::vector<Chunk> chunks_;
   std::vector<uint8_t> image_data_compressed_;
   std::vector<uint8_t> image_data_decompressed_;
+  std::vector<uint8_t> image_data_decompressed_nofilter_;
   void decompress_data(void); // データを解凍
   void compress_data(void); // データを圧縮
+  void unset_filter(void); // データのフィルターを外す
   void load_chunks(void); // チャンク読み込み
   void extract_image_data(void); // 画像データを抽出
   void delete_idat(void); // チャンク配列からIDATチャンクを削除
@@ -140,6 +142,71 @@ void PNG::compress_data(){
   deflateEnd(&strm);
 }
 
+void PNG::unset_filter(void){
+  image_data_decompressed_nofilter_.resize(image_data_decompressed_.size());
+  const size_t width_data = width_ * 3 + 1;
+  const size_t height = height_;
+  // フィルタ処理を最適化
+  for(size_t y = 0; y < height; y++){
+    const size_t row_start = y * width_data;
+    const uint8_t filter_type = image_data_decompressed_[row_start];
+    const bool has_prev_row = y > 0;
+    // フィルタタイプに応じた処理
+    switch(filter_type){
+      case 1:{ // Subフィルタ
+        for(size_t x = 1; x < width_data; x++){
+          const size_t i = row_start + x;
+          const uint8_t left = (x >= 3) ? image_data_decompressed_nofilter_[i-3] : 0;
+          image_data_decompressed_nofilter_[i] = (image_data_decompressed_[i] + left) & 0xFF;
+        }
+        break;
+      }
+      case 2:{ // Upフィルタ
+        if(has_prev_row){
+          for(size_t x = 1; x < width_data; x++){
+            const size_t i = row_start + x;
+            image_data_decompressed_nofilter_[i] = (image_data_decompressed_[i] + image_data_decompressed_nofilter_[i-width_data]) & 0xFF;
+          }
+        }else{
+          for(size_t x = 1; x < width_data; x++){
+            image_data_decompressed_nofilter_[row_start + x] = image_data_decompressed_[row_start + x];
+          }
+        }
+        break;
+      }
+      case 3:{ // Averageフィルタ
+        for(size_t x = 1; x < width_data; x++){
+          const size_t i = row_start + x;
+          const uint8_t left = (x >= 3) ? image_data_decompressed_nofilter_[i-3] : 0;
+          const uint8_t up = has_prev_row ? image_data_decompressed_nofilter_[i-width_data] : 0;
+          image_data_decompressed_nofilter_[i] = (image_data_decompressed_[i] + ((left + up) >> 1)) & 0xFF;
+        }
+        break;
+      }
+      case 4:{ // Paethフィルタ
+        for(size_t x = 1; x < width_data; x++){
+          const size_t i = row_start + x;
+          const uint8_t left = (x >= 3) ? image_data_decompressed_nofilter_[i-3] : 0;
+          const uint8_t up = has_prev_row ? image_data_decompressed_nofilter_[i-width_data] : 0;
+          const uint8_t upleft = (x >= 3 && has_prev_row) ? image_data_decompressed_nofilter_[i-width_data-3] : 0;
+          const int p = left + up - upleft;
+          const int pa = std::abs(p - left);
+          const int pb = std::abs(p - up);
+          const int pc = std::abs(p - upleft);
+          const uint8_t predictor = (pa <= pb && pa <= pc) ? left : (pb <= pc ? up : upleft);
+          image_data_decompressed_nofilter_[i] = (image_data_decompressed_[i] + predictor) & 0xFF;
+        }
+        break;
+      }
+      default:{
+        for(size_t x = 1; x < width_data; x++){
+          image_data_decompressed_nofilter_[row_start + x] = image_data_decompressed_[row_start + x];
+        }
+      }
+    }
+  }
+}
+
 void PNG::delete_idat(void){
   chunks_.erase(
     std::remove_if(chunks_.begin(), chunks_.end(),
@@ -222,72 +289,12 @@ void PNG::debug() const{
 }
 
 void PNG::reverse_color(){
-  std::vector<char> image_data_unfiltered(image_data_decompressed_.size());
-  const size_t width_data = width_ * 3 + 1;
-  const size_t height = height_;
-  // フィルタ処理を最適化
-  for(size_t y = 0; y < height; y++){
-    const size_t row_start = y * width_data;
-    const uint8_t filter_type = image_data_decompressed_[row_start];
-    const bool has_prev_row = y > 0;
-    // フィルタタイプに応じた処理
-    switch(filter_type){
-      case 1:{ // Subフィルタ
-        for(size_t x = 1; x < width_data; x++){
-          const size_t i = row_start + x;
-          const uint8_t left = (x >= 3) ? image_data_unfiltered[i-3] : 0;
-          image_data_unfiltered[i] = (image_data_decompressed_[i] + left) & 0xFF;
-        }
-        break;
-      }
-      case 2:{ // Upフィルタ
-        if(has_prev_row){
-          for(size_t x = 1; x < width_data; x++){
-            const size_t i = row_start + x;
-            image_data_unfiltered[i] = (image_data_decompressed_[i] + image_data_unfiltered[i-width_data]) & 0xFF;
-          }
-        }else{
-          for(size_t x = 1; x < width_data; x++){
-            image_data_unfiltered[row_start + x] = image_data_decompressed_[row_start + x];
-          }
-        }
-        break;
-      }
-      case 3:{ // Averageフィルタ
-        for(size_t x = 1; x < width_data; x++){
-          const size_t i = row_start + x;
-          const uint8_t left = (x >= 3) ? image_data_unfiltered[i-3] : 0;
-          const uint8_t up = has_prev_row ? image_data_unfiltered[i-width_data] : 0;
-          image_data_unfiltered[i] = (image_data_decompressed_[i] + ((left + up) >> 1)) & 0xFF;
-        }
-        break;
-      }
-      case 4:{ // Paethフィルタ
-        for(size_t x = 1; x < width_data; x++){
-          const size_t i = row_start + x;
-          const uint8_t left = (x >= 3) ? image_data_unfiltered[i-3] : 0;
-          const uint8_t up = has_prev_row ? image_data_unfiltered[i-width_data] : 0;
-          const uint8_t upleft = (x >= 3 && has_prev_row) ? image_data_unfiltered[i-width_data-3] : 0;
-          const int p = left + up - upleft;
-          const int pa = std::abs(p - left);
-          const int pb = std::abs(p - up);
-          const int pc = std::abs(p - upleft);
-          const uint8_t predictor = (pa <= pb && pa <= pc) ? left : (pb <= pc ? up : upleft);
-          image_data_unfiltered[i] = (image_data_decompressed_[i] + predictor) & 0xFF;
-        }
-        break;
-      }
-      default:{
-        for(size_t x = 1; x < width_data; x++){
-          image_data_unfiltered[row_start + x] = image_data_decompressed_[row_start + x];
-        }
-      }
-    }
-  }
+  unset_filter();
   // 色反転処理
+  const size_t width_data = width_ * 3 + 1;
   for(size_t i = 0; i < image_data_decompressed_.size(); i++){
     if(i % width_data == 0) image_data_decompressed_[i] = 0x00;
-    else image_data_decompressed_[i] = ~image_data_unfiltered[i];
+    else image_data_decompressed_[i] = ~image_data_decompressed_nofilter_[i];
   }  
   compress_data();
   delete_idat();
