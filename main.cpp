@@ -26,6 +26,7 @@ private:
   void extract_image_data(void); // 画像データを抽出
   void delete_idat(void); // チャンク配列からIDATチャンクを削除
   void insert_idat(void); // チャンク配列にIDATチャンクを追加
+  void insert_text(const std::string& keyword, const std::string& text); // チャンク配列にtEXTチャンクを追加
 public:
   explicit PNG(const std::string& path);
   void reverse_color(void);
@@ -321,6 +322,27 @@ void PNG::insert_idat(void){
   // チャンクを挿入
   chunks_.insert(chunks_.end() - 1, idat_chunk);
 }
+void PNG::insert_text(const std::string& keyword, const std::string& text){
+  // 新しいtEXTチャンクを生成
+  Chunk text_chunk;
+  text_chunk.initialize();
+  text_chunk.length() = (keyword.size() + 1 + text.size());
+  text_chunk.type() = 0x74455854;
+  text_chunk.type_string() = "tEXT";
+  // tEXTデータを設定
+  std::vector<char> data(text_chunk.length());
+  std::copy(keyword.begin(), keyword.end(), data.begin());
+  data[keyword.size()] = 0x00;
+  std::copy(text.begin(), text.end(), data.begin()+keyword.size()+1);
+  text_chunk.data() = tEXT{text_chunk.length(), data};
+  // CRCを計算
+  std::vector<char> crc_data;
+  crc_data.insert(crc_data.end(), text_chunk.type_string().begin(), text_chunk.type_string().end());
+  crc_data.insert(crc_data.end(), data.begin(), data.end());
+  text_chunk.crc() = utils::calc_crc(crc_data, 0, crc_data.size());
+  // チャンクを挿入
+  chunks_.insert(chunks_.end() - 1, text_chunk);
+}
 
 void PNG::write(const std::string& path) const{
   std::ofstream ofs(path, std::ios::out | std::ios::binary);
@@ -379,6 +401,7 @@ void PNG::reverse_color(){
   compress_data();
   delete_idat();
   insert_idat();
+  insert_text("ImageProcesser", "Tamagosushio");
 }
 
 } // namespace png
@@ -388,11 +411,14 @@ int main(int argc, char* argv[]){
   start = std::chrono::system_clock::now();
   for(int i = 0; i < n; i++){
     png::PNG png{argv[1]};
-    // png.debug();
+    png.debug();
     png.reverse_color();
     png.write("./out_reverse.png");
   }
   std::cout << get_time_microsec() << std::endl;
+  std::cout << "-------------------------------------------------------------------------" << std::endl;
+  png::PNG png{"./out_reverse.png"};
+  png.debug();
   return 0;
 }
 
