@@ -30,6 +30,7 @@ private:
 public:
   explicit PNG(const std::string& path);
   void reverse_color(void);
+  void resize_data(const double& scale_height, const double& scale_width);
   void write(const std::string& path) const;
   void debug(void) const;
 };
@@ -404,6 +405,67 @@ void PNG::reverse_color(){
   insert_text("ImageProcesser", "Tamagosushio");
 }
 
+void PNG::resize_data(const double& scale_height, const double& scale_width){
+  unset_filter();
+  const uint32_t height_resized = static_cast<uint32_t>(height_ * scale_height);
+  const uint32_t width_resized = static_cast<uint32_t>(width_ * scale_width);
+  const size_t row_size = width_resized * 3 + 1;
+  std::vector<uint8_t> image_data_resized(height_resized * row_size);
+    // 出力画像の各ピクセルに対して処理
+  for(uint32_t y = 0; y < height_resized; y++) {
+    // フィルタタイプを設定（0: None）
+    image_data_resized[y * row_size] = 0;
+    for(uint32_t x = 0; x < width_resized; x++) {
+      // 元画像での対応する座標範囲を計算
+      double src_x_start = x / scale_width;
+      double src_y_start = y / scale_height;
+      double src_x_end = (x + 1) / scale_width;
+      double src_y_end = (y + 1) / scale_height;
+      // 元画像のピクセル範囲を取得
+      uint32_t src_x0 = static_cast<uint32_t>(src_x_start);
+      uint32_t src_y0 = static_cast<uint32_t>(src_y_start);
+      uint32_t src_x1 = std::min(static_cast<uint32_t>(src_x_end) + 1, width_);
+      uint32_t src_y1 = std::min(static_cast<uint32_t>(src_y_end) + 1, height_);
+      // RGB各チャンネルに対して重み付け平均を計算
+      for(int c = 0; c < 3; c++) {
+        double weighted_sum = 0.0;
+        double total_weight = 0.0;
+        // 重なっている元画像のピクセルを処理
+        for(uint32_t src_y = src_y0; src_y < src_y1; src_y++) {
+          for(uint32_t src_x = src_x0; src_x < src_x1; src_x++) {
+            // 重なりの面積を計算
+            double overlap_x_start = std::max(src_x_start, static_cast<double>(src_x));
+            double overlap_x_end = std::min(src_x_end, static_cast<double>(src_x + 1));
+            double overlap_y_start = std::max(src_y_start, static_cast<double>(src_y));
+            double overlap_y_end = std::min(src_y_end, static_cast<double>(src_y + 1));
+            double overlap_area = (overlap_x_end - overlap_x_start) * (overlap_y_end - overlap_y_start);
+            // 元画像のピクセル値を取得（フィルタなしのデータから）
+            size_t src_idx = src_y * (width_ * 3 + 1) + src_x * 3 + c + 1;
+            uint8_t src_value = image_data_decompressed_nofilter_[src_idx];
+            weighted_sum += src_value * overlap_area;
+            total_weight += overlap_area;
+          }
+        }
+        // 重み付け平均を計算して出力
+        size_t dst_idx = y * row_size + x * 3 + c + 1;
+        image_data_resized[dst_idx] = static_cast<uint8_t>(weighted_sum / total_weight);
+      }
+    }
+  }
+  // リサイズしたデータを元のデータにコピー
+  image_data_decompressed_nofilter_ = std::move(image_data_resized);
+  height_ = height_resized;
+  width_ = width_resized;
+  // IHDRチャンクのデータを変更
+  std::get<IHDR>(chunks_[0].data()).height() = height_resized;
+  std::get<IHDR>(chunks_[0].data()).width() = width_resized;
+  set_filter();
+  compress_data();
+  delete_idat();
+  insert_idat();
+  insert_text("ImageProcesser", "Tamagosushio");
+}
+
 } // namespace png
 
 int main(int argc, char* argv[]){
@@ -412,12 +474,13 @@ int main(int argc, char* argv[]){
   for(int i = 0; i < n; i++){
     png::PNG png{argv[1]};
     png.debug();
-    png.reverse_color();
-    png.write("./out_reverse.png");
+    // png.reverse_color();
+    png.resize_data(0.75, 0.50);
+    png.write("./out_resized.png");
   }
   std::cout << get_time_microsec() << std::endl;
   std::cout << "-------------------------------------------------------------------------" << std::endl;
-  png::PNG png{"./out_reverse.png"};
+  png::PNG png{"./out_resized.png"};
   png.debug();
   return 0;
 }
