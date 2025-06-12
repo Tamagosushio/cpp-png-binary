@@ -1,5 +1,4 @@
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/highgui.hpp>
+#include <opencv2/opencv.hpp>
 #include <iostream>
 #include <string>
 #include <chrono>
@@ -10,13 +9,13 @@ int get_time_microsec(void){
 }
 
 int main(int argc, char* argv[]){
-  int n = 1;
+  int n = 100;
   start = std::chrono::system_clock::now();
   for(int i = 0; i < n; i++){
     cv::Mat img = cv::imread(argv[1], cv::IMREAD_COLOR);
-    if(img.empty()) return -1;
-    cv::Mat dst = ~img;
-    cv::imwrite("../out_reverse_opencv.png", dst);
+    img = ~img;
+    // cv::resize(img, img, cv::Size(), 2.00, 1.50);
+    cv::imwrite("../out_reverse_opencv.png", img);
   }
   std::cout << get_time_microsec() << std::endl;
   return 0;
