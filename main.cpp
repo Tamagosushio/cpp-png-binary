@@ -13,9 +13,10 @@ int main(int argc, char* argv[]){
   for(int i = 0; i < n; i++){
     png::PNG png{argv[1]};
     // png.debug();
-    png.reverse_color();
+    png.collapse(10);
+    // png.reverse_color();
     // png.resize_data(1.50, 2.00);
-    png.write("./out_reverse.png");
+    png.write("./out_collapsed.png");
   }
   std::cout << get_time_microsec() << std::endl;
   // std::cout << "-------------------------------------------------------------------------" << std::endl;

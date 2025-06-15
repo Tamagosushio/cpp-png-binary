@@ -1,5 +1,21 @@
 # pragma once
 # include "chunk.hpp"
+# include <random>
+
+std::random_device seed_gen;
+std::default_random_engine engine(seed_gen());
+
+
+template<typename T, typename U>
+std::ostream& operator<<(std::ostream& os, const std::pair<T, U>& p){
+  os << "(" << p.first << ", " << p.second << ")";
+  return os;
+}
+
+inline int rand_int(int min, int max){
+  std::uniform_int_distribution<> dist(min, max);
+  return dist(engine);
+} 
 
 namespace png {
 
@@ -26,6 +42,7 @@ public:
   explicit PNG(const std::string& path);
   void reverse_color(void);
   void resize_data(const double& scale_height, const double& scale_width);
+  void collapse(const int& shuffle_num);
   void write(const std::string& path) const;
   void debug(void) const;
 };
@@ -454,6 +471,37 @@ void PNG::resize_data(const double& scale_height, const double& scale_width){
   // IHDRチャンクのデータを変更
   std::get<IHDR>(chunks_[0].data()).height() = height_resized;
   std::get<IHDR>(chunks_[0].data()).width() = width_resized;
+  set_filter();
+  compress_data();
+  delete_idat();
+  insert_idat();
+  insert_text("ImageProcesser", "Tamagosushio");
+}
+
+void PNG::collapse(const int& shuffle_num){
+  unset_filter();
+
+  std::vector<uint8_t> collapsed = image_data_decompressed_nofilter_;
+  const size_t width_data = width_ * 3 + 1;
+  for(int _=0; _ < shuffle_num; _++){
+    std::pair<int,int> clip_size{
+      rand_int(1, height_), rand_int(1, width_)
+    };
+    std::pair<int,int> clip_pos{
+      rand_int(0, height_ - clip_size.first), rand_int(0, width_ - clip_size.second)
+    };
+    std::pair<int,int> paste_pos{
+      rand_int(0, height_ - clip_size.first), rand_int(0, width_ - clip_size.second)
+    };
+    for(int h = 0; h < clip_size.first; h++){
+      for(int w = 0; w < clip_size.second*3; w++){
+        collapsed[(h + paste_pos.first) * width_data + (w + paste_pos.second)]
+          = image_data_decompressed_nofilter_[(h + clip_pos.first) * width_data + (w + clip_pos.second)];
+      }
+    }
+  }
+  image_data_decompressed_nofilter_ = std::move(collapsed);
+
   set_filter();
   compress_data();
   delete_idat();
